@@ -1,0 +1,535 @@
+#pragma once
+
+/*****************************************************************************
+ *
+ *  bitmap_display.hh
+ *  Bitmap Display
+ *
+ *  MIT License
+ *  
+ *  Copyright (c) 2025 Dennis Munsie
+ *  
+ *  Permission is hereby granted, free of charge, to any person obtaining a copy
+ *  of this software and associated documentation files (the "Software"), to deal
+ *  in the Software without restriction, including without limitation the rights
+ *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *  copies of the Software, and to permit persons to whom the Software is
+ *  furnished to do so, subject to the following conditions:
+ *  
+ *  The above copyright notice and this permission notice shall be included in all
+ *  copies or substantial portions of the Software.
+ *  
+ *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ *  SOFTWARE.
+ *
+ *****************************************************************************/
+
+#include <algorithm>
+#include <exception>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdint>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#include "ansi.hh"
+#include "exception.hh"
+
+/*****************************************************************************
+ *
+ *  24-bit Color type
+ *
+ *  This class represents a 24-bit color with 8-bits for red, green and blue.
+ *  There are some predefined colors to use directly.  The default color is
+ *  black.
+ *
+ *****************************************************************************/
+struct Color {
+  Color() = default;
+  Color(uint8_t r, uint8_t g, uint8_t b) : red(r), green(g), blue(b) {}
+
+  uint8_t red = 0x00, green = 0x00, blue = 0x00;
+
+  bool operator ==(const Color &other) const {
+    return (red == other.red) && (green == other.green) && (blue == other.blue);
+  }
+
+  bool operator !=(const Color &other) const {
+    return !(other == *this);
+  }
+
+  static const Color BLACK;
+  static const Color RED;
+  static const Color GREEN;
+  static const Color YELLOW;
+  static const Color BLUE;
+  static const Color MAGENTA;
+  static const Color CYAN;
+  static const Color WHITE;
+};
+
+const Color Color::BLACK   = Color(0x00, 0x00, 0x00);
+const Color Color::RED     = Color(0xff, 0x00, 0x00);
+const Color Color::GREEN   = Color(0x00, 0xff, 0x00);
+const Color Color::YELLOW  = Color(0xff, 0xff, 0x00);
+const Color Color::BLUE    = Color(0x00, 0x00, 0xff);
+const Color Color::MAGENTA = Color(0xff, 0x00, 0xff);
+const Color Color::CYAN    = Color(0x00, 0xff, 0xff);
+const Color Color::WHITE   = Color(0xff, 0xff, 0xff);
+
+/*****************************************************************************
+ *
+ *  Color Palette
+ *
+ *  A color palette is simply a vector containing 0 to 256 colors.  Any
+ *  additional colors beyond 256 will be ignored.
+ *
+ *  There are also predefined palettes that can be used as well from various
+ *  8-bit systems and also a standard 8-color palette that uses the colors
+ *  defined above.
+ *
+ *****************************************************************************/
+using Palette = std::vector<Color>;
+
+static const Palette EIGHT_COLOR_PREDEFINED_PALETTE = {
+  Color::BLACK, Color::RED,     Color::GREEN, Color::YELLOW,
+  Color::BLUE,  Color::MAGENTA, Color::CYAN,  Color::WHITE,
+};
+
+// Commodore 64 Color Palette
+static const Palette C64_PREDEFINED_PALETTE = {
+  { 0x00, 0x00, 0x00 }, // black
+  { 0xff, 0xff, 0xff }, // white
+  { 0x88, 0x00, 0x00 }, // red
+  { 0xaa, 0xff, 0xee }, // cyan
+  { 0xcc, 0x44, 0xcc }, // violet
+  { 0x00, 0xcc, 0x55 }, // green
+  { 0x00, 0x00, 0xaa }, // blue
+  { 0xee, 0xee, 0x77 }, // yellow
+  { 0xdd, 0x88, 0x55 }, // orange
+  { 0x66, 0x44, 0x00 }, // brown
+  { 0xff, 0x77, 0x77 }, // light red
+  { 0x33, 0x33, 0x33 }, // grey 1
+  { 0x77, 0x77, 0x77 }, // grey 2
+  { 0xaa, 0xff, 0x66 }, // light green
+  { 0x00, 0x88, 0xff }, // light blue
+  { 0xbb, 0xbb, 0xbb }, // grey 3
+};
+
+// Atari GTIA Color Palette
+static const Palette ATARI_PREDEFINED_PALETTE = {
+  { 0x00, 0x00, 0x00 }, { 0x11, 0x11, 0x11 }, { 0x22, 0x22, 0x22 }, { 0x33, 0x33, 0x33 },
+  { 0x44, 0x44, 0x44 }, { 0x55, 0x55, 0x55 }, { 0x66, 0x66, 0x66 }, { 0x77, 0x77, 0x77 },
+  { 0x88, 0x88, 0x88 }, { 0x99, 0x99, 0x99 }, { 0xaa, 0xaa, 0xaa }, { 0xbb, 0xbb, 0xbb },
+  { 0xcc, 0xcc, 0xcc }, { 0xdd, 0xdd, 0xdd }, { 0xee, 0xee, 0xee }, { 0xff, 0xff, 0xff },
+  { 0x09, 0x19, 0x00 }, { 0x1a, 0x2a, 0x00 }, { 0x2b, 0x3b, 0x00 }, { 0x3c, 0x4c, 0x00 },
+  { 0x4d, 0x5d, 0x00 }, { 0x5e, 0x6e, 0x00 }, { 0x6f, 0x7f, 0x00 }, { 0x80, 0x90, 0x00 },
+  { 0x91, 0xa1, 0x00 }, { 0xa2, 0xb2, 0x01 }, { 0xb3, 0xc3, 0x12 }, { 0xc4, 0xd4, 0x23 },
+  { 0xd5, 0xe5, 0x34 }, { 0xe6, 0xf6, 0x45 }, { 0xf7, 0xff, 0x56 }, { 0xff, 0xff, 0x67 },
+  { 0x30, 0x00, 0x00 }, { 0x41, 0x11, 0x00 }, { 0x52, 0x22, 0x00 }, { 0x63, 0x33, 0x00 },
+  { 0x74, 0x44, 0x00 }, { 0x85, 0x55, 0x00 }, { 0x96, 0x66, 0x00 }, { 0xa7, 0x77, 0x00 },
+  { 0xb8, 0x88, 0x09 }, { 0xc9, 0x99, 0x1a }, { 0xda, 0xaa, 0x2b }, { 0xeb, 0xbb, 0x3c },
+  { 0xfc, 0xcc, 0x4d }, { 0xff, 0xdd, 0x5e }, { 0xff, 0xee, 0x6f }, { 0xff, 0xff, 0x80 },
+  { 0x4b, 0x00, 0x00 }, { 0x5c, 0x00, 0x00 }, { 0x6d, 0x0a, 0x00 }, { 0x7e, 0x1b, 0x00 },
+  { 0x8f, 0x2c, 0x00 }, { 0xa0, 0x3d, 0x0d }, { 0xb1, 0x4e, 0x1e }, { 0xc2, 0x5f, 0x2f },
+  { 0xd3, 0x70, 0x40 }, { 0xe4, 0x81, 0x51 }, { 0xf5, 0x92, 0x62 }, { 0xff, 0xa3, 0x73 },
+  { 0xff, 0xb4, 0x84 }, { 0xff, 0xc5, 0x95 }, { 0xff, 0xd6, 0xa6 }, { 0xff, 0xe7, 0xb7 },
+  { 0x55, 0x00, 0x00 }, { 0x66, 0x00, 0x10 }, { 0x77, 0x00, 0x21 }, { 0x88, 0x08, 0x32 },
+  { 0x99, 0x19, 0x43 }, { 0xaa, 0x2a, 0x54 }, { 0xbb, 0x3b, 0x65 }, { 0xcc, 0x4c, 0x76 },
+  { 0xdd, 0x5d, 0x87 }, { 0xee, 0x6e, 0x98 }, { 0xff, 0x7f, 0xa9 }, { 0xff, 0x90, 0xba },
+  { 0xff, 0xa1, 0xcb }, { 0xff, 0xb2, 0xdc }, { 0xff, 0xc3, 0xed }, { 0xff, 0xd4, 0xfe },
+  { 0x4c, 0x00, 0x47 }, { 0x5d, 0x00, 0x58 }, { 0x6e, 0x00, 0x69 }, { 0x7f, 0x00, 0x7a },
+  { 0x90, 0x10, 0x8b }, { 0xa1, 0x21, 0x9c }, { 0xb2, 0x32, 0xad }, { 0xc3, 0x43, 0xbe },
+  { 0xd4, 0x54, 0xcf }, { 0xe5, 0x65, 0xe0 }, { 0xf6, 0x76, 0xf1 }, { 0xff, 0x87, 0xff },
+  { 0xff, 0x98, 0xff }, { 0xff, 0xa9, 0xff }, { 0xff, 0xba, 0xff }, { 0xff, 0xcb, 0xff },
+  { 0x30, 0x00, 0x7e }, { 0x41, 0x00, 0x8f }, { 0x52, 0x00, 0xa0 }, { 0x63, 0x02, 0xb1 },
+  { 0x74, 0x13, 0xc2 }, { 0x85, 0x24, 0xd3 }, { 0x96, 0x35, 0xe4 }, { 0xa7, 0x46, 0xf5 },
+  { 0xb8, 0x57, 0xff }, { 0xc9, 0x68, 0xff }, { 0xda, 0x79, 0xff }, { 0xeb, 0x8a, 0xff },
+  { 0xfc, 0x9b, 0xff }, { 0xff, 0xac, 0xff }, { 0xff, 0xbd, 0xff }, { 0xff, 0xce, 0xff },
+  { 0x0a, 0x00, 0x97 }, { 0x1b, 0x00, 0xa8 }, { 0x2c, 0x00, 0xb9 }, { 0x3d, 0x11, 0xca },
+  { 0x4e, 0x22, 0xdb }, { 0x5f, 0x33, 0xec }, { 0x70, 0x44, 0xfd }, { 0x81, 0x55, 0xff },
+  { 0x92, 0x66, 0xff }, { 0xa3, 0x77, 0xff }, { 0xb4, 0x88, 0xff }, { 0xc5, 0x99, 0xff },
+  { 0xd6, 0xaa, 0xff }, { 0xe7, 0xbb, 0xff }, { 0xf8, 0xcc, 0xff }, { 0xff, 0xdd, 0xff },
+  { 0x00, 0x00, 0x8e }, { 0x00, 0x05, 0x9f }, { 0x03, 0x16, 0xb0 }, { 0x14, 0x27, 0xc1 },
+  { 0x25, 0x38, 0xd2 }, { 0x36, 0x49, 0xe3 }, { 0x47, 0x5a, 0xf4 }, { 0x58, 0x6b, 0xff },
+  { 0x69, 0x7c, 0xff }, { 0x7a, 0x8d, 0xff }, { 0x8b, 0x9e, 0xff }, { 0x9c, 0xaf, 0xff },
+  { 0xad, 0xc0, 0xff }, { 0xbe, 0xd1, 0xff }, { 0xcf, 0xe2, 0xff }, { 0xe0, 0xf3, 0xff },
+  { 0x00, 0x0e, 0x64 }, { 0x00, 0x1f, 0x75 }, { 0x00, 0x30, 0x86 }, { 0x00, 0x41, 0x97 },
+  { 0x03, 0x52, 0xa8 }, { 0x14, 0x63, 0xb9 }, { 0x25, 0x74, 0xca }, { 0x36, 0x85, 0xdb },
+  { 0x47, 0x96, 0xec }, { 0x58, 0xa7, 0xfd }, { 0x69, 0xb8, 0xff }, { 0x7a, 0xc9, 0xff },
+  { 0x8b, 0xda, 0xff }, { 0x9c, 0xeb, 0xff }, { 0xad, 0xfc, 0xff }, { 0xbe, 0xff, 0xff },
+  { 0x00, 0x24, 0x22 }, { 0x00, 0x35, 0x33 }, { 0x00, 0x46, 0x44 }, { 0x00, 0x57, 0x55 },
+  { 0x00, 0x68, 0x66 }, { 0x02, 0x79, 0x77 }, { 0x13, 0x8a, 0x88 }, { 0x24, 0x9b, 0x99 },
+  { 0x35, 0xac, 0xaa }, { 0x46, 0xbd, 0xbb }, { 0x57, 0xce, 0xcc }, { 0x68, 0xdf, 0xdd },
+  { 0x79, 0xf0, 0xee }, { 0x8a, 0xff, 0xff }, { 0x9b, 0xff, 0xff }, { 0xac, 0xff, 0xff },
+  { 0x00, 0x32, 0x00 }, { 0x00, 0x43, 0x00 }, { 0x00, 0x54, 0x00 }, { 0x00, 0x65, 0x0c },
+  { 0x00, 0x76, 0x1d }, { 0x02, 0x87, 0x2e }, { 0x13, 0x98, 0x3f }, { 0x24, 0xa9, 0x50 },
+  { 0x35, 0xba, 0x61 }, { 0x46, 0xcb, 0x72 }, { 0x57, 0xdc, 0x83 }, { 0x68, 0xed, 0x94 },
+  { 0x79, 0xfe, 0xa5 }, { 0x8a, 0xff, 0xb6 }, { 0x9b, 0xff, 0xc7 }, { 0xac, 0xff, 0xd8 },
+  { 0x00, 0x34, 0x00 }, { 0x00, 0x45, 0x00 }, { 0x00, 0x56, 0x00 }, { 0x00, 0x67, 0x00 },
+  { 0x05, 0x78, 0x00 }, { 0x16, 0x89, 0x00 }, { 0x27, 0x9a, 0x00 }, { 0x38, 0xab, 0x0f },
+  { 0x49, 0xbc, 0x20 }, { 0x5a, 0xcd, 0x31 }, { 0x6b, 0xde, 0x42 }, { 0x7c, 0xef, 0x53 },
+  { 0x8d, 0xff, 0x64 }, { 0x9e, 0xff, 0x75 }, { 0xaf, 0xff, 0x86 }, { 0xc0, 0xff, 0x97 },
+  { 0x00, 0x2a, 0x00 }, { 0x00, 0x3b, 0x00 }, { 0x06, 0x4c, 0x00 }, { 0x17, 0x5d, 0x00 },
+  { 0x28, 0x6e, 0x00 }, { 0x39, 0x7f, 0x00 }, { 0x4a, 0x90, 0x00 }, { 0x5b, 0xa1, 0x00 },
+  { 0x6c, 0xb2, 0x00 }, { 0x7d, 0xc3, 0x09 }, { 0x8e, 0xd4, 0x1a }, { 0x9f, 0xe5, 0x2b },
+  { 0xb0, 0xf6, 0x3c }, { 0xc1, 0xff, 0x4d }, { 0xd2, 0xff, 0x5e }, { 0xe3, 0xff, 0x6f },
+  { 0x0d, 0x17, 0x00 }, { 0x1e, 0x28, 0x00 }, { 0x2f, 0x39, 0x00 }, { 0x40, 0x4a, 0x00 },
+  { 0x51, 0x5b, 0x00 }, { 0x62, 0x6c, 0x00 }, { 0x73, 0x7d, 0x00 }, { 0x84, 0x8e, 0x00 },
+  { 0x95, 0x9f, 0x00 }, { 0xa6, 0xb0, 0x02 }, { 0xb7, 0xc1, 0x13 }, { 0xc8, 0xd2, 0x24 },
+  { 0xd9, 0xe3, 0x35 }, { 0xea, 0xf4, 0x46 }, { 0xfb, 0xff, 0x57 }, { 0xff, 0xff, 0x68 },
+  { 0x33, 0x00, 0x00 }, { 0x44, 0x0f, 0x00 }, { 0x55, 0x20, 0x00 }, { 0x66, 0x31, 0x00 },
+  { 0x77, 0x42, 0x00 }, { 0x88, 0x53, 0x00 }, { 0x99, 0x64, 0x00 }, { 0xaa, 0x75, 0x00 },
+  { 0xbb, 0x86, 0x0e }, { 0xcc, 0x97, 0x1f }, { 0xdd, 0xa8, 0x30 }, { 0xee, 0xb9, 0x41 },
+  { 0xff, 0xca, 0x52 }, { 0xff, 0xdb, 0x63 }, { 0xff, 0xec, 0x74 }, { 0xff, 0xfd, 0x85 },
+};
+
+static const Palette WHITE_BLUE_PREDEFINED_PALETTE = {
+  { 0x00, 0x00, 0xaa }, // blue
+  { 0xff, 0xff, 0xff }, // white
+};
+
+// Nintendo Entertainment System Color Palette
+static const Palette NES_PREDEFINED_PALETTE = {
+  { 0x7C, 0x7C, 0x7C }, { 0x00, 0x00, 0xFC }, { 0x00, 0x00, 0xBC }, { 0x44, 0x28, 0xBC },
+  { 0x94, 0x00, 0x84 }, { 0xA8, 0x00, 0x20 }, { 0xA8, 0x10, 0x00 }, { 0x88, 0x14, 0x00 },
+  { 0x50, 0x30, 0x00 }, { 0x00, 0x78, 0x00 }, { 0x00, 0x68, 0x00 }, { 0x00, 0x58, 0x00 },
+  { 0x00, 0x40, 0x58 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
+  { 0xBC, 0xBC, 0xBC }, { 0x00, 0x78, 0xF8 }, { 0x00, 0x58, 0xF8 }, { 0x68, 0x44, 0xFC },
+  { 0xD8, 0x00, 0xCC }, { 0xE4, 0x00, 0x58 }, { 0xF8, 0x38, 0x00 }, { 0xE4, 0x5C, 0x10 },
+  { 0xAC, 0x7C, 0x00 }, { 0x00, 0xB8, 0x00 }, { 0x00, 0xA8, 0x00 }, { 0x00, 0xA8, 0x44 },
+  { 0x00, 0x88, 0x88 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
+  { 0xF8, 0xF8, 0xF8 }, { 0x3C, 0xBC, 0xFC }, { 0x68, 0x88, 0xFC }, { 0x98, 0x78, 0xF8 },
+  { 0xF8, 0x78, 0xF8 }, { 0xF8, 0x58, 0x98 }, { 0xF8, 0x78, 0x58 }, { 0xFC, 0xA0, 0x44 },
+  { 0xF8, 0xB8, 0x00 }, { 0xB8, 0xF8, 0x18 }, { 0x58, 0xD8, 0x54 }, { 0x58, 0xF8, 0x98 },
+  { 0x00, 0xE8, 0xD8 }, { 0x78, 0x78, 0x78 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },
+  { 0xFC, 0xFC, 0xFC }, { 0xA4, 0xE4, 0xFC }, { 0xB8, 0xB8, 0xF8 }, { 0xD8, 0xB8, 0xF8 },
+  { 0xF8, 0xB8, 0xF8 }, { 0xF8, 0xA4, 0xC0 }, { 0xF0, 0xD0, 0xB0 }, { 0xFC, 0xE0, 0xA8 },
+  { 0xF8, 0xD8, 0x78 }, { 0xD8, 0xF8, 0x78 }, { 0xB8, 0xF8, 0xB8 }, { 0xB8, 0xF8, 0xD8 },
+  { 0x00, 0xFC, 0xFC }, { 0xF8, 0xD8, 0xF8 }, { 0x00, 0x00, 0x00 }, { 0x00, 0x00, 0x00 },  
+};
+
+enum PredefinedPalette {
+  EightColorPredefinedPalette,
+  C64PredefinedPalette,
+  AtariPredefinedPalette,
+  WhiteBluePredefinedPalette,
+  NESPredefinedPalette,
+};
+
+const Palette & predefinedPalette(enum PredefinedPalette palette) {
+  switch(palette) {
+  case EightColorPredefinedPalette: 
+  default: return EIGHT_COLOR_PREDEFINED_PALETTE;
+  case C64PredefinedPalette: return C64_PREDEFINED_PALETTE;
+  case AtariPredefinedPalette: return ATARI_PREDEFINED_PALETTE;
+  case WhiteBluePredefinedPalette: return WHITE_BLUE_PREDEFINED_PALETTE;
+  case NESPredefinedPalette: return NES_PREDEFINED_PALETTE;
+  }
+}
+
+/*****************************************************************************
+ *
+ *  Bitmap class
+ *
+ *  This is the underlying Bitmap representation of what will be displayed
+ *  by the BitmapDisplay class below.  It handles storing of the raw pixel color
+ *  values and also mapping to and from palette colors.
+ *
+ *****************************************************************************/
+class Bitmap {
+public:
+  Bitmap(unsigned width = 64, unsigned height = 64, PredefinedPalette palette = EightColorPredefinedPalette) : _width(width), _height(height), _bitmap(width * height) {
+    setPalette(palette);
+    clear();
+  }
+
+  virtual ~Bitmap() = default;
+
+  void clear(uint8_t paletteIndex = 0) {
+    if(paletteIndex < _palette.size()) {
+      clear(_palette[paletteIndex]);
+    } else {
+      clear(Color());
+    }
+  }
+
+  void clear(const Color &c) {
+    std::fill(_bitmap.begin(), _bitmap.end(), c);
+  }
+
+  void setPalette(const Palette &palette) {
+    _palette = palette;
+  }
+
+  void setPalette(PredefinedPalette palette) {
+    _palette = predefinedPalette(palette);
+  }
+
+  void setPixel(unsigned x, unsigned y, uint8_t paletteIndex) {
+    paletteIndex %= _palette.size();
+    setPixel(x, y, _palette[paletteIndex]);
+  }
+
+  void setPixel(unsigned x, unsigned y, const Color &color) {
+    if((x >= _width) || (y >= _height)) {
+      return;
+    }
+    _bitmap[x + y * _width] = color;
+  }
+
+  const Color &getPixel(unsigned x, unsigned y) const {
+    if((x >= _width) || (y >= _height)) {
+      return Color::BLACK;
+    }
+    return _bitmap[x + y * _width];
+  }
+
+  const uint8_t getPixelPalette(unsigned x, unsigned y) const {
+    auto c = getPixel(x, y);
+    for(unsigned i = 0; i < _palette.size(); i++) {
+      if(c == _palette[i]) {
+        return (uint8_t)i;
+      }
+    }
+    return 0;
+  }
+
+protected:
+  unsigned _width, _height;
+  std::vector<Color> _bitmap;
+  Palette _palette;
+};
+
+/*****************************************************************************
+ *
+ *  BitmapDisplay
+ *
+ *  This class handles displaying Bitmaps to a terminal display using 24-bit
+ *  truecolor support (see https://github.com/termstandard/colors).  To get a 
+ *  more square pixel, each charcter in the terminal is broken up into a top
+ *  and bottom half using the Unicode lower half block (U+2584) character.
+ *  The top half color is the background color and the bottom half is the 
+ *  foreground color.
+ *
+ *  When using this class, you must call enable() before any pixels will be
+ *  displayed.  All output is done using the alternate screen mode in the terminal.
+ *  When done with the display, disable() should be called to restore the primary
+ *  screen mode and reset the state of the cursor and colors.  This can be done
+ *  using atexit() to insure a proper cleanup on exit.
+ *
+ *  There are two modes of operation -- raw and batched.  Raw mode will send out
+ *  write out to stdout for every pixel operation.  Batched will accumulate the
+ *  the output to an internal buffer until the flush() method is called.  This
+ *  is slightly more efficient than writing each pixel.
+ *
+ *  Internally, this class keeps track of the current cursor position, foreground
+ *  and background colors to minimize the amount of state changes that are
+ *  needed to send to the terminal.  This further reduces the amount of work that
+ *  is needed to be done by the terminal.
+ *
+ *  This class has been tested primarily on MacOS using iTerm2.  It should work
+ *  on any terminal program that properly supports 24-bit Truecolor.  Notably, 
+ *  Terminal on MacOS does not support Truecolor.
+ *
+ *  Example Usage:
+ *
+ *    BitmapDisplay display;
+ *    display.setPalette(AtariPredefinedPalette);
+ *    display.enable();
+ *
+ *    // draw something to the frame
+ *    display.setPixel(0, 0, 128);
+ *    display.flush();
+ *
+ *    // when you are done
+ *    display.disable();
+ *
+ *****************************************************************************/
+class BitmapDisplay {
+public:
+  BitmapDisplay(std::shared_ptr<Bitmap> bitmap = nullptr) : _bitmap(bitmap) {
+    struct winsize w;
+    if(::ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) < 0) {
+      throw Exception("Cannot get terminal dimensions");
+    }
+    _width = w.ws_col;
+    _height = w.ws_row * 2;
+
+    if(_bitmap == nullptr) {
+      _bitmap = std::make_shared<Bitmap>(_width, _height);
+    }
+  }
+
+  virtual ~BitmapDisplay() {
+    disable();
+  }
+
+  std::shared_ptr<Bitmap> bitmap() { return _bitmap; }
+  const std::shared_ptr<Bitmap> bitmap() const { return _bitmap; }
+
+  void enable() {
+    if(!_enabled) {
+      _enabled = true;
+  
+      auto oldRawMode = _rawMode;
+      setRawMode(false);
+
+      write(ANSI_ALT_SCREEN_ON);
+      write(ANSI_CURSOR_OFF);
+      write(ANSI_CLEAR_SCREEN);
+
+      setFGColor(Color::BLACK);
+      setBGColor(Color::BLACK);
+      moveTo(0, 0);
+      
+      clear();
+      flush();
+      setRawMode(oldRawMode);
+    }
+  }
+
+  void disable() {
+    if(_enabled) {
+      auto oldRawMode = _rawMode;
+      setRawMode(false);
+      
+      write(ANSI_ALT_SCREEN_OFF);
+      write(ANSI_CURSOR_ON);
+      write(ANSI_RESET);
+      
+      moveTo(0, _height - 1);
+
+      flush();
+      setRawMode(oldRawMode);
+
+      _enabled = false;
+    }
+  }
+
+  bool enabled() const { return _enabled; }
+
+  void setRawMode(bool flag) {
+    _rawMode = flag;
+    if(_rawMode) {
+      flush();
+    }
+  }
+   
+  void flush() {
+    auto s = _outputBuffer.str();
+    if(s.length() > 0) {
+      ::write(STDOUT_FILENO, s.c_str(), s.length());
+      _outputBuffer.str(std::string());
+    }
+  }
+
+  void setPixel(unsigned x, unsigned y, uint8_t paletteIndex) {
+    _bitmap->setPixel(x, y, paletteIndex);
+    if(_enabled) {
+      drawPixelPair(x, y);
+    }
+  }
+
+  const Color &getPixel(unsigned x, unsigned y) const {
+    return _bitmap->getPixel(x, y);
+  }
+  
+  const uint8_t getPixelPalette(unsigned x, unsigned y) const {
+    return _bitmap->getPixelPalette(x, y);
+  }
+  
+  void setPalette(PredefinedPalette palette) {
+    _bitmap->setPalette(palette);
+    // force a redraw with the new palette if we're enabled
+    if(_enabled) {
+      disable();
+      enable();
+    }
+  }
+
+  void clear() {
+    _bitmap->clear();
+    for(unsigned y = 0; y < _height; y+= 2) {
+      for(unsigned x = 0; x < _width; x++) {
+        drawPixelPair(x, y);
+      }
+    }
+  }
+  
+protected:
+  bool _enabled = false;
+  unsigned _width;
+  unsigned _height;
+  std::shared_ptr<Bitmap> _bitmap = nullptr;
+  Color _fgColor = Color::MAGENTA;
+  Color _bgColor = Color::MAGENTA;
+  unsigned _xPos = UINT_MAX;
+  unsigned _yPos = UINT_MAX;
+  bool _rawMode = false;
+  std::stringstream _outputBuffer;
+
+  void moveTo(unsigned x, unsigned y) {
+    if((_xPos != x) || (_yPos != y)) {
+      std::stringstream ss;
+      ss << "\033[" << unsigned(y + 1) << ";" << unsigned(x + 1) << "H";
+      write(ss.str());
+      _xPos = x;
+      _yPos = y;
+    }
+  }
+
+  void setFGColor(const Color &c) {
+    if(_fgColor != c) {
+      std::stringstream ss;
+      ss << "\033[38;2;" << unsigned(c.red) << ";" << unsigned(c.green) << ";" << unsigned(c.blue) << "m";
+      write(ss.str());
+      _fgColor = c;
+    }
+  }
+
+  void setBGColor(const Color &c) {
+    if(_bgColor != c) {
+      std::stringstream ss;
+      ss << "\033[48;2;" << unsigned(c.red) << ";" << unsigned(c.green) << ";" << unsigned(c.blue) << "m";
+      write(ss.str());
+      _bgColor = c;
+    }
+  }
+
+  void drawPixelPair(unsigned x, unsigned y) {
+    moveTo(x, y >> 1);
+    unsigned row = y & ~1;
+    auto bg = _bitmap->getPixel(x, row + 0);
+    setBGColor(bg);
+    auto fg = _bitmap->getPixel(x, row + 1);
+    if(bg == fg) {
+      write(" ");
+    } else {
+      setFGColor(fg);
+      write(LOWER_HALF_BLOCK);
+    }
+    _xPos++;
+  }
+
+  size_t write(const std::string &s) {
+    auto length = s.length();
+    _outputBuffer << s;
+    if(_rawMode) {
+      flush();
+    }
+    return length;
+  }
+};
